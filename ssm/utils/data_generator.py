@@ -23,7 +23,7 @@ warnings.filterwarnings('ignore')
 
 class DataGeneration:
     def __init__(self, config) -> None:
-        self.env = grid2op.make(config.env_name, reward_class=L2RPNSandBoxScore,
+        self.env = grid2op.make(config['env_name'], reward_class=L2RPNSandBoxScore,
                                 backend=LightSimBackend())
         self.config = config
         self.action_converter = ActionConverter(self.env)
