@@ -238,3 +238,56 @@ class LatentLinearSSM(nn.Module):
 
         loss = F.mse_loss(z_tp1_pred, z_tp1_true)
         return loss
+
+
+
+class LatentSSMTrainer:
+    def __init__(self, model:LatentLinearSSM, train_loader, lr=1e-3, device=None):
+        self.model = model
+        self.train_loader = train_loader
+
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device
+
+        self.model.to(self.device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+
+    def _batch_loss(self, batch):
+        x_t, u_t, x_tp1 = batch
+        x_t = x_t.to(self.device)
+        u_t = u_t.to(self.device)
+        x_tp1 = x_tp1.to(self.device)
+
+        return self.model.compute_loss(x_t, u_t, x_tp1)
+
+    def train_one_epoch(self):
+        self.model.train()
+        total = 0
+        for x_t, u_t, x_tp1 in self.train_loader:
+            loss = self._batch_loss((x_t, u_t, x_tp1))
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            total += loss.item()
+        return total / len(self.train_loader)
+
+    @torch.no_grad()
+    def evaluate(self, val_loader):
+        if val_loader is None:
+            return None
+
+        self.model.eval()
+        total = 0
+        for x_t, u_t, x_tp1 in val_loader:
+            loss = self._batch_loss((x_t, u_t, x_tp1))
+            total += loss.item()
+        return total / len(val_loader)
+
+    def fit(self, epochs):
+        for e in range(1, epochs + 1):
+            train_loss = self.train_one_epoch()
+            val_loss = self.evaluate()
+            print(f"Epoch {e}: train={train_loss:.6f} | val={val_loss}")
