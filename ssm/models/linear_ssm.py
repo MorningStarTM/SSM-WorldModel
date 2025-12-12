@@ -182,3 +182,59 @@ class LinearSSMTrainer:
 
         return history
 
+
+
+
+
+class LatentLinearSSM(nn.Module):
+    """
+    JEPA-style latent-linear SSM:
+        z_t = encoder(x_t)
+        z_{t+1}_pred = A z_t + B u_t
+        loss = MSE(z_{t+1}_pred, encoder(x_{t+1}))
+    """
+    def __init__(self, obs_dim, action_dim, latent_dim):
+        super().__init__()
+
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        self.latent_dim = latent_dim
+
+        # ----------------------
+        # Encoder network E(x)
+        # ----------------------
+        self.encoder = nn.Sequential(
+            nn.Linear(obs_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, latent_dim)
+        )
+
+        # ----------------------
+        # Learnable A, B in latent space
+        # ----------------------
+        self.A = nn.Parameter(0.01 * torch.randn(latent_dim, latent_dim))
+        self.B = nn.Parameter(0.01 * torch.randn(latent_dim, action_dim))
+
+    def encode(self, x):
+        """Encode raw observation into latent z."""
+        return self.encoder(x)
+
+    def step(self, x_t, u_t):
+        """
+        JEPA-style one-step prediction:
+            z_t = encoder(x_t)
+            z_pred_tp1 = A z_t + B u_t
+        """
+        z_pred_tp1 = x_t @ self.A.T + u_t @ self.B.T
+        return z_pred_tp1
+
+    def compute_loss(self, x_t, u_t, x_tp1):
+        """
+        JEPA latent prediction loss:
+            z_{t+1}_pred vs z_{t+1}_true
+        """
+        z_tp1_pred = self.step(x_t, u_t)
+        z_tp1_true = self.encode(x_tp1).detach()  # stop gradient like JEPA
+
+        loss = F.mse_loss(z_tp1_pred, z_tp1_true)
+        return loss
