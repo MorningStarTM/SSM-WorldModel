@@ -187,69 +187,45 @@ class LinearSSMTrainer:
 
 
 class LatentLinearSSM(nn.Module):
-    """
-    JEPA-style latent-linear SSM:
-        z_t = encoder(x_t)
-        z_{t+1}_pred = A z_t + B u_t
-        loss = MSE(z_{t+1}_pred, encoder(x_{t+1}))
-    """
     def __init__(self, obs_dim, action_dim, latent_dim):
         super().__init__()
-
         self.obs_dim = obs_dim
         self.action_dim = action_dim
         self.latent_dim = latent_dim
 
-        # ----------------------
-        # Encoder network E(x)
-        # ----------------------
         self.encoder = nn.Sequential(
             nn.Linear(obs_dim, 512),
             nn.ReLU(),
-            nn.Linear(512, latent_dim)
+            nn.Linear(512, latent_dim),
         )
 
-        # ----------------------
-        # Learnable A, B in latent space
-        # ----------------------
+        # Latent dynamics matrices
         self.A = nn.Parameter(0.01 * torch.randn(latent_dim, latent_dim))
         self.B = nn.Parameter(0.01 * torch.randn(latent_dim, action_dim))
 
     def encode(self, x):
-        """Encode raw observation into latent z."""
         return self.encoder(x)
 
     def step(self, x_t, u_t):
-        """
-        JEPA-style one-step prediction:
-            z_t = encoder(x_t)
-            z_pred_tp1 = A z_t + B u_t
-        """
-        z_pred_tp1 = x_t @ self.A.T + u_t @ self.B.T
+        z_t = self.encode(x_t)                     # (B, latent_dim)
+        z_pred_tp1 = z_t @ self.A.T + u_t @ self.B.T  # (B, latent_dim)
         return z_pred_tp1
 
     def compute_loss(self, x_t, u_t, x_tp1):
-        """
-        JEPA latent prediction loss:
-            z_{t+1}_pred vs z_{t+1}_true
-        """
-        z_tp1_pred = self.step(x_t, u_t)
-        z_tp1_true = self.encode(x_tp1).detach()  # stop gradient like JEPA
+        z_tp1_pred = self.step(x_t, u_t)               # (B, latent_dim)
+        z_tp1_true = self.encode(x_tp1).detach()       # (B, latent_dim)
+        return F.mse_loss(z_tp1_pred, z_tp1_true)
 
-        loss = F.mse_loss(z_tp1_pred, z_tp1_true)
-        return loss
 
 
 
 class LatentSSMTrainer:
-    def __init__(self, model:LatentLinearSSM, train_loader, lr=1e-3, device=None):
+    def __init__(self, model:LatentLinearSSM, train_loader, val_loader=None, lr=1e-3, device=None):
         self.model = model
         self.train_loader = train_loader
+        self.val_loader = val_loader
 
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = device
-
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
@@ -258,36 +234,34 @@ class LatentSSMTrainer:
         x_t = x_t.to(self.device)
         u_t = u_t.to(self.device)
         x_tp1 = x_tp1.to(self.device)
-
         return self.model.compute_loss(x_t, u_t, x_tp1)
 
     def train_one_epoch(self):
         self.model.train()
-        total = 0
-        for x_t, u_t, x_tp1 in self.train_loader:
-            loss = self._batch_loss((x_t, u_t, x_tp1))
-
+        total = 0.0
+        for batch in self.train_loader:
+            loss = self._batch_loss(batch)
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
-
             total += loss.item()
         return total / len(self.train_loader)
 
     @torch.no_grad()
-    def evaluate(self, val_loader):
-        if val_loader is None:
+    def evaluate(self):
+        if self.val_loader is None:
             return None
-
         self.model.eval()
-        total = 0
-        for x_t, u_t, x_tp1 in val_loader:
-            loss = self._batch_loss((x_t, u_t, x_tp1))
-            total += loss.item()
-        return total / len(val_loader)
+        total = 0.0
+        for batch in self.val_loader:
+            total += self._batch_loss(batch).item()
+        return total / len(self.val_loader)
 
     def fit(self, epochs):
         for e in range(1, epochs + 1):
             train_loss = self.train_one_epoch()
             val_loss = self.evaluate()
-            print(f"Epoch {e}: train={train_loss:.6f} | val={val_loss}")
+            if val_loss is None:
+                print(f"Epoch {e}: train={train_loss:.6f}")
+            else:
+                print(f"Epoch {e}: train={train_loss:.6f} | val={val_loss:.6f}")
