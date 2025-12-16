@@ -257,11 +257,33 @@ class LatentSSMTrainer:
             total += self._batch_loss(batch).item()
         return total / len(self.val_loader)
 
-    def fit(self, epochs):
+    def fit(self, epochs, save_path="best_model.pt"):
+        best_val = float("inf")
+
         for e in range(1, epochs + 1):
             train_loss = self.train_one_epoch()
             val_loss = self.evaluate()
+
+            # choose metric: val if available, else train
+            metric = val_loss if val_loss is not None else train_loss
+            improved = metric < best_val
+
+            if improved:
+                best_val = metric
+                torch.save(
+                    {
+                        "epoch": e,
+                        "best_metric": best_val,
+                        "model_state_dict": self.model.state_dict(),
+                        "optimizer_state_dict": self.optimizer.state_dict(),
+                    },
+                    save_path,
+                )
+
             if val_loss is None:
-                print(f"Epoch {e}: train={train_loss:.6f}")
+                print(f"Epoch {e}: train={train_loss:.6f}"
+                    f"{'  [BEST saved]' if improved else ''}")
             else:
-                print(f"Epoch {e}: train={train_loss:.6f} | val={val_loss:.6f}")
+                print(f"Epoch {e}: train={train_loss:.6f} | val={val_loss:.6f}"
+                    f"{'  [BEST saved]' if improved else ''}")
+
